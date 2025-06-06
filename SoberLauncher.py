@@ -3,34 +3,38 @@
 import sys
 import os
 import subprocess
+import shutil
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QFileDialog, QLineEdit, QMessageBox, QInputDialog, QLabel, QDialog, QSizePolicy, QListWidget, QAbstractItemView
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtGui import QIcon, QPixmap  # ✅ Correct imports for icons
 
 class SoberLauncher(QWidget):
     def __init__(self):
         super().__init__()
-        self.base_dir = None
+        self.base_dir = None  # ✅ Initialize base_dir
         self.profiles = []
-        self.selected_profiles = [] 
+        self.selected_profiles = []  # ✅ Allow multiple profile selection
         self.initUI()
         self.loadPreviousDirectory()
 
     def initUI(self):
-        main_layout = QHBoxLayout()  
+        main_layout = QHBoxLayout()  # ✅ Ensure right panel is positioned correctly
 
-       
+        # Left section for profile selection
         left_layout = QVBoxLayout()
         
-        
+        # Top bar layout
         top_bar = QHBoxLayout()
 
         self.selectDirButton = QPushButton("Select Base Directory")
         self.selectDirButton.clicked.connect(self.selectDirectory)
         top_bar.addWidget(self.selectDirButton)
 
-        self.profileInput = QLineEdit()
-        self.profileInput.setPlaceholderText("Enter profile name")
-        top_bar.addWidget(self.profileInput)
+        # Add refresh button with an icon
+        self.refreshButton = QPushButton()
+        self.refreshButton.setIcon(QIcon.fromTheme("view-refresh"))  # Use a standard refresh icon
+        self.refreshButton.setToolTip("Refresh Profiles")
+        self.refreshButton.clicked.connect(self.scanForProfiles)  # Connect to the scanForProfiles method
+        top_bar.addWidget(self.refreshButton)
 
         self.createProfileButton = QPushButton("Create Profile")
         self.createProfileButton.clicked.connect(self.createProfile)
@@ -46,15 +50,20 @@ class SoberLauncher(QWidget):
 
         left_layout.addLayout(top_bar)
 
-        
+        # Profile list (✅ Correct normal selection behavior: Shift & Ctrl work properly)
         self.profileList = QListWidget()
-        self.profileList.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)  
+        self.profileList.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)  # ✅ Fixed selection behavior
         self.profileList.itemSelectionChanged.connect(self.updateSelectedProfiles)
         left_layout.addWidget(self.profileList)
 
-        
+        # Right panel (✅ Correctly positioned to the right)
         right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)  # Optional: Remove extra margins
+        right_layout.setSpacing(10)  # Optional: Adjust spacing between widgets
+
         self.selectedProfileLabel = QLabel("Selected Profiles: None")
+        self.selectedProfileLabel.setWordWrap(True)  # ✅ Enable word wrapping for long text
+        self.selectedProfileLabel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # ✅ Prevent expanding the window
         right_layout.addWidget(self.selectedProfileLabel)
 
         self.launchButton = QPushButton("Launch Game")
@@ -69,13 +78,18 @@ class SoberLauncher(QWidget):
         self.runSpecificGameButton.clicked.connect(self.runSpecificGame)
         right_layout.addWidget(self.runSpecificGameButton)
 
+        # Set a fixed width for the right panel
+        right_panel_widget = QWidget()
+        right_panel_widget.setLayout(right_layout)
+        right_panel_widget.setFixedWidth(300)  # ✅ Set the desired fixed width for the right bar
+
         main_layout.addLayout(left_layout)
-        main_layout.addLayout(right_layout)
+        main_layout.addWidget(right_panel_widget)  # Add the fixed-width right panel
 
         self.setLayout(main_layout)
         self.setWindowTitle("Sober Launcher")
-        self.setWindowIcon(QIcon("SoberLauncher.svg")) 
-        self.showMaximized()  
+        self.setWindowIcon(QIcon("SoberLauncher.svg"))  # ✅ Properly loads app icon
+        self.showMaximized()  # ✅ Opens maximized (not fullscreen)
 
         self.scanForProfiles()
 
@@ -85,7 +99,7 @@ class SoberLauncher(QWidget):
             self.base_dir = os.path.abspath(dir_selected)
             QMessageBox.information(self, "Directory Selected", f"Base Directory: {self.base_dir}")
             self.scanForProfiles()
-            self.savePreviousDirectory()  
+            self.savePreviousDirectory()  # ✅ Fixed missing method call
 
     def savePreviousDirectory(self):
         """✅ Save the selected directory for persistence."""
@@ -101,12 +115,15 @@ class SoberLauncher(QWidget):
                 self.scanForProfiles()
 
     def createProfile(self):
+        """✅ Create a new profile with a dialog to choose the name."""
         if not self.base_dir:
             QMessageBox.warning(self, "Error", "Please select a base directory first.")
             return
 
-        profile_name = self.profileInput.text().strip()
-        if profile_name:
+        # Show input dialog to get the profile name
+        profile_name, ok = QInputDialog.getText(self, "Choose a Name", "Enter the profile name:")
+        if ok and profile_name.strip():
+            profile_name = profile_name.strip()
             profile_path = os.path.join(self.base_dir, profile_name)
             local_path = os.path.join(profile_path, ".local")
 
@@ -140,17 +157,29 @@ class SoberLauncher(QWidget):
                 subprocess.Popen(command, shell=True)
 
     def runWithConsole(self):
-        """✅ Launch multiple selected profiles with a console."""
+        """✅ Launch multiple selected profiles with the default terminal."""
         if not self.selected_profiles:
             QMessageBox.warning(self, "Error", "No profiles selected.")
             return
-        
+
+        # Check for terminal emulator availability
+        terminal_command = None
+        if shutil.which("konsole"):
+            terminal_command = "konsole -e"
+        elif shutil.which("x-terminal-emulator"):
+            terminal_command = "x-terminal-emulator -e"
+        elif shutil.which("gnome-terminal"):
+            terminal_command = "gnome-terminal --"
+        else:
+            QMessageBox.critical(self, "Error", "No compatible terminal emulator found.")
+            return
+
         for profile in self.selected_profiles:
             if profile == "Main Profile":
-                subprocess.Popen("konsole -e flatpak run org.vinegarhq.Sober", shell=True)
+                subprocess.Popen(f"{terminal_command} flatpak run org.vinegarhq.Sober", shell=True)
             else:
                 profile_path = os.path.join(self.base_dir, profile)
-                command = f'konsole -e env HOME="{profile_path}" flatpak run org.vinegarhq.Sober'
+                command = f'{terminal_command} env HOME="{profile_path}" flatpak run org.vinegarhq.Sober'
                 subprocess.Popen(command, shell=True)
 
     def runSpecificGame(self):
@@ -172,7 +201,7 @@ class SoberLauncher(QWidget):
     def scanForProfiles(self):
         """✅ Ensure 'Main Profile' is always first, then sorted profiles."""
         self.profileList.clear()
-        profiles = ["Main Profile"]
+        profiles = []
 
         if self.base_dir and os.path.exists(self.base_dir):
             with os.scandir(self.base_dir) as entries:
@@ -182,7 +211,10 @@ class SoberLauncher(QWidget):
                         if os.path.exists(local_path) and os.path.isdir(local_path):
                             profiles.append(entry.name)
 
-        profiles.sort()
+        profiles.sort()  # Sort profiles alphabetically
+        if "Main Profile" in profiles:
+            profiles.remove("Main Profile")  # Remove "Main Profile" if it exists in the list
+        profiles.insert(0, "Main Profile")  # Ensure "Main Profile" is always at the top
         self.profileList.addItems(profiles)
 
     def exitAllSessions(self):
@@ -198,7 +230,7 @@ class SoberLauncher(QWidget):
         layout = QHBoxLayout()
 
         icon_label = QLabel()
-        icon_label.setPixmap(QPixmap("SoberLauncher.svg")) 
+        icon_label.setPixmap(QPixmap("SoberLauncher.svg"))  # ✅ Properly displays About icon
         title_label = QLabel("<b>Sober Launcher</b><br>An easy launcher to control all your Sober Instances<br><br><i>Author: Taboulet</i>")
 
         layout.addWidget(icon_label)
