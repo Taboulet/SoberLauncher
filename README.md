@@ -7,7 +7,7 @@ This is a way to create profiles for Sober and run them all at the same time usi
 This is a basic project made by me, i'll fix the issues but don't expect a perfect app made by a big team and stuff
 This is made with python, to launch it just double click on the "SoberLauncher.py" file (try to make it executable if it's not for some reason)
 This is mainly made for steamos, this will of course work on other distros but for now this won't be perfect
-The "Launch with console" button works only with "Konsole", i need to fix it but i'll do it later lol
+This will launch Sober in a specific environnement, which will make all profiles have their own data, meaning this will take a bit of space (roughly 500-700MB per profies), i might make them all use the same data folder but i first need to find the folders responsible for the folder's account data
 (Might've used a lil bit of ai to create this)
 
 
