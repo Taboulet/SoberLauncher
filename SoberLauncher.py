@@ -6,6 +6,24 @@ import subprocess
 import shutil
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QFileDialog, QLineEdit, QMessageBox, QInputDialog, QLabel, QDialog, QSizePolicy, QListWidget, QAbstractItemView
 from PyQt6.QtGui import QIcon, QPixmap  # ✅ Correct imports for icons
+from PyQt6.QtCore import QThread, pyqtSignal
+
+__version__ = "Release V1.2"  # Define the current version
+
+class UpdateThread(QThread):
+    update_failed = pyqtSignal(str)
+    update_success = pyqtSignal()
+
+    def run(self):
+        try:
+            # Run the update script
+            subprocess.run(["python3", os.path.join(os.path.dirname(__file__), "update.py")], check=True)
+            self.update_success.emit()
+        except subprocess.CalledProcessError as e:
+            self.update_failed.emit(str(e))
+
+    def __init__(self):
+        super().__init__()
 
 class SoberLauncher(QWidget):
     def __init__(self):
@@ -47,6 +65,11 @@ class SoberLauncher(QWidget):
         self.aboutButton = QPushButton("About")
         self.aboutButton.clicked.connect(self.showAbout)
         top_bar.addWidget(self.aboutButton)
+
+        # Add "Remove Crash" button at the top
+        self.removeCrashButton = QPushButton("Remove Crash")
+        self.removeCrashButton.clicked.connect(self.removeCrashWindows)
+        top_bar.addWidget(self.removeCrashButton)
 
         left_layout.addLayout(top_bar)
 
@@ -190,12 +213,22 @@ class SoberLauncher(QWidget):
         
         url, ok = QInputDialog.getText(self, "Game Link", "Enter the game link:")
         if ok and url.strip():
+            # Extract placeId from the URL
+            import re
+            match = re.search(r"games/(\d+)", url.strip())
+            if not match:
+                QMessageBox.warning(self, "Error", "Invalid Roblox game link.")
+                return
+            
+            place_id = match.group(1)
+            roblox_command = f'roblox://experience?placeId={place_id}'
+
             for profile in self.selected_profiles:
                 if profile == "Main Profile":
-                    subprocess.Popen(f'flatpak run org.vinegarhq.Sober "{url.strip()}"', shell=True)
+                    subprocess.Popen(f'flatpak run org.vinegarhq.Sober "{roblox_command}"', shell=True)
                 else:
                     profile_path = os.path.join(self.base_dir, profile)
-                    command = f'env HOME="{profile_path}" flatpak run org.vinegarhq.Sober "{url.strip()}"'
+                    command = f'env HOME="{profile_path}" flatpak run org.vinegarhq.Sober "{roblox_command}"'
                     subprocess.Popen(command, shell=True)
 
     def scanForProfiles(self):
@@ -227,16 +260,51 @@ class SoberLauncher(QWidget):
     def showAbout(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("About Sober Launcher")
-        layout = QHBoxLayout()
+        layout = QVBoxLayout()
 
+        # About information
         icon_label = QLabel()
-        icon_label.setPixmap(QPixmap("SoberLauncher.svg"))  # ✅ Properly displays About icon
+        icon_label.setPixmap(QPixmap("SoberLauncher.svg"))  # Properly displays About icon
         title_label = QLabel("<b>Sober Launcher</b><br>An easy launcher to control all your Sober Instances<br><br><i>Author: Taboulet</i>")
+        version_label = QLabel(f"<b>Current Version:</b> {__version__}")  # Display current version dynamically
 
         layout.addWidget(icon_label)
         layout.addWidget(title_label)
+        layout.addWidget(version_label)
+
+        # Update button
+        update_button = QPushButton("Update")
+        update_button.clicked.connect(self.runUpdateScript)
+        layout.addWidget(update_button)
+
         dialog.setLayout(layout)
         dialog.exec()
+
+    def runUpdateScript(self):
+        """Run the update script in a separate thread."""
+        self.update_thread = UpdateThread()
+        self.update_thread.update_failed.connect(lambda error: QMessageBox.critical(self, "Error", f"Failed to run update script: {error}"))
+        self.update_thread.update_success.connect(lambda: QMessageBox.information(self, "Update", "Update completed successfully."))
+        self.update_thread.start()
+
+    def removeCrashWindows(self):
+        """Kill any window with the name 'Crash' related to the flatpak."""
+        try:
+            # Use xdotool to find windows with "Crash" in their title
+            result = subprocess.run(
+                ["xdotool", "search", "--name", "Crash"], capture_output=True, text=True
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                QMessageBox.information(self, "Info", "No 'Crash' windows found.")
+                return
+
+            window_ids = result.stdout.strip().split("\n")
+            for window_id in window_ids:
+                subprocess.run(["xdotool", "windowkill", window_id])
+        except FileNotFoundError:
+            QMessageBox.critical(
+                self, "Error", "The 'xdotool' command is not available. Please ensure it is installed."
+            )
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
