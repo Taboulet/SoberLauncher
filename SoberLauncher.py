@@ -7,8 +7,9 @@ import shutil
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QFileDialog, QLineEdit, QMessageBox, QInputDialog, QLabel, QDialog, QSizePolicy, QListWidget, QAbstractItemView
 from PyQt6.QtGui import QIcon, QPixmap  # ✅ Correct imports for icons
 from PyQt6.QtCore import QThread, pyqtSignal
+import re  # Add this import for natural sorting
 
-__version__ = "Release V1.2"  # Define the current version
+__version__ = "Release V1.2.1"  # Define the current version
 
 class UpdateThread(QThread):
     update_failed = pyqtSignal(str)
@@ -214,7 +215,6 @@ class SoberLauncher(QWidget):
         url, ok = QInputDialog.getText(self, "Game Link", "Enter the game link:")
         if ok and url.strip():
             # Extract placeId from the URL
-            import re
             match = re.search(r"games/(\d+)", url.strip())
             if not match:
                 QMessageBox.warning(self, "Error", "Invalid Roblox game link.")
@@ -232,7 +232,7 @@ class SoberLauncher(QWidget):
                     subprocess.Popen(command, shell=True)
 
     def scanForProfiles(self):
-        """✅ Ensure 'Main Profile' is always first, then sorted profiles."""
+        """✅ Ensure 'Main Profile' is always first, then sort profiles naturally."""
         self.profileList.clear()
         profiles = []
 
@@ -244,7 +244,11 @@ class SoberLauncher(QWidget):
                         if os.path.exists(local_path) and os.path.isdir(local_path):
                             profiles.append(entry.name)
 
-        profiles.sort()  # Sort profiles alphabetically
+        # Natural sorting function
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+        profiles.sort(key=natural_sort_key)  # Sort profiles naturally
         if "Main Profile" in profiles:
             profiles.remove("Main Profile")  # Remove "Main Profile" if it exists in the list
         profiles.insert(0, "Main Profile")  # Ensure "Main Profile" is always at the top
