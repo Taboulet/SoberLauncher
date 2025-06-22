@@ -3,6 +3,11 @@ An easy launcher to control all your Sober Instances
 
 This is a way to create profiles for Sober and run them all at the same time using environnement variables
 
+🌐 Dependencies
+- You will need PyQt6 and python-requests, download them using :
+`sudo pacman -S python-requests python-pyqt6` or
+`pip install requests PyQt6`
+
 ⚠️ Clear limitation
 - This is a basic project made by me, i'll fix the issues but don't expect a perfect app made by a big team and stuff
 - This is made with python, to launch it just double click on the "SoberLauncher.py" file (try to make it executable if it's not for some reason)
