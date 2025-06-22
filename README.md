@@ -6,7 +6,7 @@ This is a way to create profiles for Sober and run them all at the same time usi
 🌐 Dependencies
 - You will need PyQt6 and python-requests, download them using :
 `sudo pacman -S python-requests python-pyqt6` or
-`pip install requests PyQt6`
+`pip install requests PyQt6` (xdotool, flatpak and Sober are also needed, Sober HAS to be downloaded in system using `sudo flatpak install --system flathub org.vinegarhq.Sober`and fix permission issues with `sudo flatpak override --system --device=all org.vinegarhq.Sober`)
 
 ⚠️ Clear limitation
 - This is a basic project made by me, i'll fix the issues but don't expect a perfect app made by a big team and stuff
