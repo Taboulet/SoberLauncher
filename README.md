@@ -18,4 +18,5 @@ This is a way to create profiles for Sober and run them all at the same time usi
 
 
 
-![image](https://github.com/user-attachments/assets/db1608d7-e819-4af9-87ed-3923a1204250)
+<img width="1280" height="747" alt="image" src="https://github.com/user-attachments/assets/fa20df60-d224-47cd-8ff6-ccff148efb09" />
+
