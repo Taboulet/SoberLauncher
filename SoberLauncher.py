@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer, Qt
 
-__version__ = "Release V1.2.1"
+__version__ = "Release V1.4"
 
 
 class UpdateThread(QThread):
