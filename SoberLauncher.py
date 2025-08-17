@@ -12,10 +12,10 @@ from PyQt6.QtWidgets import (
     QLineEdit, QMessageBox, QInputDialog, QLabel, QDialog, QSizePolicy, QListWidget,
     QAbstractItemView, QCheckBox, QDialogButtonBox, QTabWidget, QMenu
 )
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtGui import QIcon, QPixmap, QPalette, QColor, QBrush
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer, Qt
 
-__version__ = "Release V1.4"
+__version__ = "Release V1.4.2"
 
 
 class UpdateThread(QThread):
@@ -81,6 +81,7 @@ class SoberLauncher(QWidget):
         # Réglages
         self.display_name = "[Name]"
         self.privateServers = []  # liste de tuples (name, parameter)
+        self.roblox_player_enabled = False  # toggle Roblox Player tab (default off)
 
         # Charger réglages (JSON + migration auto)
         self.loadSettings()
@@ -130,7 +131,6 @@ class SoberLauncher(QWidget):
                         lines = [line.strip() for line in f.readlines()]
                     for line in lines:
                         if line.startswith("last_directory="):
-                            # si présent, privilégier cette valeur
                             v = line[len("last_directory="):].strip()
                             base_dir = os.path.abspath(v) if v else base_dir
                         elif line.startswith("Name="):
@@ -138,7 +138,6 @@ class SoberLauncher(QWidget):
                         elif line.startswith("PrivateServers="):
                             raw = line[len("PrivateServers="):]
                             if raw:
-                                # Ancien format "Nom|Param,Nom2|Param2"
                                 for s in raw.split(","):
                                     if "|" in s:
                                         n, p = s.split("|", 1)
@@ -150,16 +149,16 @@ class SoberLauncher(QWidget):
                 "last_directory": base_dir,
                 "Name": name,
                 "PrivateServers": servers,
+                "roblox_player_enabled": False,
             }
 
-            # Écrire le JSON migré
             try:
                 with open(self.settings_json, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception:
                 pass
 
-        # Appliquer avec valeurs de secours
+        # Appliquer
         self.base_dir = data.get("last_directory") or None
         self.display_name = data.get("Name", self.display_name)
 
@@ -171,12 +170,14 @@ class SoberLauncher(QWidget):
                 normalized.append((item[0], item[1]))
         self.privateServers = normalized
 
+        self.roblox_player_enabled = bool(data.get("roblox_player_enabled", False))
+
     def saveSettings(self):
         data = {
             "last_directory": self.base_dir,
             "Name": self.display_name,
             "PrivateServers": [{"name": n, "parameter": p} for (n, p) in self.privateServers],
-            "version": __version__
+            "roblox_player_enabled": self.roblox_player_enabled,
         }
         try:
             with open(self.settings_json, "w", encoding="utf-8") as f:
@@ -226,7 +227,7 @@ class SoberLauncher(QWidget):
 
         for profile in self.selected_profiles:
             if profile in self.processes and self.processes[profile].poll() is None:
-                continue  # déjà lancé
+                continue  # already running
 
             if profile == "Main Profile":
                 proc = subprocess.Popen("flatpak run org.vinegarhq.Sober", shell=True)
@@ -344,6 +345,19 @@ class SoberLauncher(QWidget):
         self.missingInstancesLabel.setFont(font)
         self.missingInstancesLabel.setText(text)
 
+        # Highlight missing profiles in blue in the list
+        self.colorizeMissingProfiles(missing)
+
+    def colorizeMissingProfiles(self, missing):
+        # Determine default text color from current palette (to restore non-missing)
+        default_color = self.palette().color(QPalette.ColorRole.WindowText)
+        for i in range(self.profileList.count()):
+            item = self.profileList.item(i)
+            if item.text() in missing:
+                item.setForeground(QBrush(QColor("#1e3a8a")))  # dark blue
+            else:
+                item.setForeground(QBrush(default_color))
+
     def runMissingInstances(self):
         running = list(self.processes.keys())
         missing = [p for p in self.launched_profiles if p not in running]
@@ -389,12 +403,46 @@ class SoberLauncher(QWidget):
         layout.addWidget(title_label)
         layout.addWidget(version_label)
 
+        # Toggle for Roblox Player stuff
+        toggle_row = QHBoxLayout()
+        toggle_label = QLabel("Activate Roblox Player stuff")
+        self.robloxToggle = QCheckBox()
+        self.robloxToggle.setChecked(self.roblox_player_enabled)
+        self.robloxToggle.stateChanged.connect(self.onRobloxToggleChanged)
+        toggle_row.addWidget(toggle_label)
+        toggle_row.addWidget(self.robloxToggle)
+        toggle_row.addStretch(1)
+        layout.addLayout(toggle_row)
+
         update_button = QPushButton("Update")
         update_button.clicked.connect(self.runUpdateScript)
         layout.addWidget(update_button)
 
         dialog.setLayout(layout)
         dialog.exec()
+
+    def onRobloxToggleChanged(self, state):
+        self.roblox_player_enabled = (state == Qt.CheckState.Checked.value)
+        self.saveSettings()
+        self.updateRobloxTabVisibility()
+
+    def updateRobloxTabVisibility(self):
+        # Add or remove the Roblox Player tab depending on the toggle
+        idx = self.main_tab_widget.indexOf(self.roblox_tab)
+        if self.roblox_player_enabled:
+            if idx == -1:
+                self.main_tab_widget.addTab(self.roblox_tab, "Roblox Player")
+        else:
+            if idx != -1:
+                self.main_tab_widget.removeTab(idx)
+
+        # Hide the tab bar when only one tab is visible (no wasted space)
+        show_tabs = self.main_tab_widget.count() > 1
+        self.main_tab_widget.tabBar().setVisible(show_tabs)
+
+        # Keep focus on the remaining tab
+        if self.main_tab_widget.count() >= 1 and self.main_tab_widget.currentIndex() == -1:
+            self.main_tab_widget.setCurrentIndex(0)
 
     def runUpdateScript(self):
         self.update_thread = UpdateThread()
@@ -463,17 +511,74 @@ class SoberLauncher(QWidget):
         self.launched_profiles.add(profile)
         self.updateMissingInstancesLabel()
 
+    # ------------- Fix selected profiles (any state) -------------
+
+    def fixSelectedProfiles(self):
+        targets = list(self.selected_profiles)
+        if not targets:
+            QMessageBox.information(self, "Info", "Select at least one profile to fix.")
+            return
+
+        # Ask for fix method
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Fix Profiles")
+        msg.setText("Which fix method would you prefer?")
+        delete_btn = msg.addButton("Delete local files (keeps the data, normally)", QMessageBox.ButtonRole.AcceptRole)
+        exit_btn = msg.addButton("Exit", QMessageBox.ButtonRole.RejectRole)
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.exec()
+
+        if msg.clickedButton() != delete_btn:
+            return
+
+        errors = []
+        for profile in targets:
+            try:
+                self.deleteLocalFilesForProfile(profile)
+            except Exception as e:
+                errors.append(f"{profile}: {e}")
+
+        if errors:
+            QMessageBox.warning(self, "Fix Completed with Errors", "Some profiles could not be fully fixed:\n- " + "\n- ".join(errors))
+        else:
+            QMessageBox.information(self, "Fix Completed", "Selected profiles were fixed successfully.")
+
+    def deleteLocalFilesForProfile(self, profile):
+        # Compute org.vinegarhq.Sober dir for the profile
+        if profile == "Main Profile":
+            home = os.path.expanduser("~")
+            org_dir = os.path.join(home, ".var", "app", "org.vinegarhq.Sober")
+        else:
+            if not self.base_dir:
+                raise RuntimeError("Base directory is not set.")
+            profile_path = os.path.join(self.base_dir, profile)
+            org_dir = os.path.join(profile_path, ".var", "app", "org.vinegarhq.Sober")
+
+        to_delete = [".ld.so", ".local", "cache"]
+        for name in to_delete:
+            path = os.path.join(org_dir, name)
+            if os.path.exists(path):
+                try:
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to delete {name}: {e}")
+
     # ------------- Nom affiché -------------
 
     def editDisplayName(self):
         name, ok = QInputDialog.getText(self, "Edit Name", "Enter your name:", text=self.display_name)
         if ok and name.strip():
             self.display_name = name.strip()
-            self.displayNameLabel.setText(f"Hi, {self.display_name}")
+            if hasattr(self, "displayNameLabel"):
+                self.displayNameLabel.setText(f"Hi, {self.display_name}")
             self.saveSettings()
 
     def loadDisplayName(self):
-        self.displayNameLabel.setText(f"Hi, {self.display_name}")
+        if hasattr(self, "displayNameLabel"):
+            self.displayNameLabel.setText(f"Hi, {self.display_name}")
 
     # ------------- Serveurs privés -------------
 
@@ -548,6 +653,8 @@ class SoberLauncher(QWidget):
 
     def refreshPrivateServerButtons(self):
         # Nettoyer
+        if not hasattr(self, "privateServerButtonsLayout"):
+            return
         while self.privateServerButtonsLayout.count():
             item = self.privateServerButtonsLayout.takeAt(0)
             w = item.widget()
@@ -560,7 +667,7 @@ class SoberLauncher(QWidget):
     # ------------- UI -------------
 
     def initUI(self):
-        main_tab_widget = QTabWidget()
+        self.main_tab_widget = QTabWidget()
 
         # Barre globale (placeholder)
         global_top_bar = QHBoxLayout()
@@ -628,6 +735,12 @@ class SoberLauncher(QWidget):
         self.runSpecificGameButton.clicked.connect(self.runSpecificGame)
         right_layout.addWidget(self.runSpecificGameButton)
 
+        # Fix button (works for any selected profiles)
+        self.fixButton = QPushButton("Fix")
+        self.fixButton.setToolTip("Fix selected profiles (delete local files)")
+        self.fixButton.clicked.connect(self.fixSelectedProfiles)
+        right_layout.addWidget(self.fixButton)
+
         right_panel_widget = QWidget()
         right_panel_widget.setLayout(right_layout)
         right_panel_widget.setFixedWidth(300)
@@ -655,10 +768,10 @@ class SoberLauncher(QWidget):
         instances_layout.addLayout(bottom_layout)
         instances_tab.setLayout(instances_layout)
 
-        # ----- Onglet Roblox Player -----
-        roblox_tab = QWidget()
+        # ----- Roblox Player tab (created once; visibility controlled by toggle) -----
+        self.roblox_tab = QWidget()
         roblox_layout = QVBoxLayout()
-        roblox_tab.setLayout(roblox_layout)
+        self.roblox_tab.setLayout(roblox_layout)
 
         roblox_layout.addStretch(2)
 
@@ -705,23 +818,39 @@ class SoberLauncher(QWidget):
         roblox_layout.addLayout(button_row)
         roblox_layout.addStretch(6)
 
-        # Recharger le nom et les serveurs privés à l'affichage
+        # Recharger nom et serveurs privés
         QTimer.singleShot(0, self.loadDisplayName)
         QTimer.singleShot(0, self.refreshPrivateServerButtons)
 
-        # Tabs
-        main_tab_widget.addTab(instances_tab, "Instances")
-        main_tab_widget.addTab(roblox_tab, "Roblox Player")
-        main_tab_widget.setCurrentIndex(0)
+        # Tabs: always add Instances; Roblox tab added conditionally
+        self.main_tab_widget.addTab(instances_tab, "Instances")
+        if self.roblox_player_enabled:
+            self.main_tab_widget.addTab(self.roblox_tab, "Roblox Player")
 
+        # Hide tab bar if only one tab visible
+        self.updateRobloxTabVisibility()
+
+        # Layout wrapper
         wrapper_layout = QVBoxLayout()
         wrapper_layout.addLayout(global_top_bar)
-        wrapper_layout.addWidget(main_tab_widget)
+        wrapper_layout.addWidget(self.main_tab_widget)
         self.setLayout(wrapper_layout)
 
         self.setWindowTitle("Sober Launcher")
         self.setWindowIcon(QIcon("SoberLauncher.svg"))
-        self.showMaximized()
+
+        # Apply startup window mode (maximize/fullscreen depending on environment)
+        self.applyWindowStartupMode()
+
+    # ------------- Startup window mode -------------
+
+    def applyWindowStartupMode(self):
+        # Ensure fullscreen on Steam Deck Gaming Mode (gamescope)
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        if "gamescope" in desktop or os.environ.get("STEAMDECK", "") == "1":
+            self.showFullScreen()
+        else:
+            self.showMaximized()
 
     # ------------- Sélection et dossiers -------------
 
@@ -740,8 +869,41 @@ class SoberLauncher(QWidget):
         )
 
 
+def apply_dark_blue_theme_if_no_theme(app: QApplication):
+    # If no icon theme is set, assume no theme and apply a dark blue Fusion palette
+    if not QIcon.themeName():
+        app.setStyle("Fusion")
+        palette = QPalette()
+
+        # Base colors
+        dark_gray = QColor(30, 30, 30)
+        mid_gray = QColor(45, 45, 45)
+        light_gray = QColor(200, 200, 200)
+        text_gray = QColor(220, 220, 220)
+        blue = QColor("#1e3a8a")  # dark blue highlight
+
+        palette.setColor(QPalette.ColorRole.Window, dark_gray)
+        palette.setColor(QPalette.ColorRole.WindowText, text_gray)
+        palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
+        palette.setColor(QPalette.ColorRole.AlternateBase, mid_gray)
+        palette.setColor(QPalette.ColorRole.ToolTipBase, light_gray)
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(20, 20, 20))
+        palette.setColor(QPalette.ColorRole.Text, text_gray)
+        palette.setColor(QPalette.ColorRole.Button, mid_gray)
+        palette.setColor(QPalette.ColorRole.ButtonText, text_gray)
+        palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+        palette.setColor(QPalette.ColorRole.Link, QColor("#60a5fa"))
+        palette.setColor(QPalette.ColorRole.Highlight, blue)
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(240, 240, 240))
+        app.setPalette(palette)
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # Apply dark blue theme automatically if no theme is detected
+    apply_dark_blue_theme_if_no_theme(app)
+
     window = SoberLauncher()
-    window.show()
+    # No window.show() here; applyWindowStartupMode decides showFullScreen/showMaximized
     sys.exit(app.exec())
