@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QIcon, QPixmap, QPalette, QColor, QBrush
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer, Qt
 
-__version__ = "Release V1.4.2"
+__version__ = "Release V1.5"
 
 
 class UpdateThread(QThread):
@@ -82,6 +82,11 @@ class SoberLauncher(QWidget):
         self.display_name = "[Name]"
         self.privateServers = []  # liste de tuples (name, parameter)
         self.roblox_player_enabled = False  # toggle Roblox Player tab (default off)
+        self.allow_multi_instance = False   # default OFF
+
+        # Internal UI refs
+        self.instances_layout = None
+        self.bottom_layout_added = False
 
         # Charger réglages (JSON + migration auto)
         self.loadSettings()
@@ -150,6 +155,7 @@ class SoberLauncher(QWidget):
                 "Name": name,
                 "PrivateServers": servers,
                 "roblox_player_enabled": False,
+                "AllowMultiInstance": False,
             }
 
             try:
@@ -171,6 +177,7 @@ class SoberLauncher(QWidget):
         self.privateServers = normalized
 
         self.roblox_player_enabled = bool(data.get("roblox_player_enabled", False))
+        self.allow_multi_instance = bool(data.get("AllowMultiInstance", False))
 
     def saveSettings(self):
         data = {
@@ -178,6 +185,7 @@ class SoberLauncher(QWidget):
             "Name": self.display_name,
             "PrivateServers": [{"name": n, "parameter": p} for (n, p) in self.privateServers],
             "roblox_player_enabled": self.roblox_player_enabled,
+            "AllowMultiInstance": self.allow_multi_instance,
         }
         try:
             with open(self.settings_json, "w", encoding="utf-8") as f:
@@ -220,14 +228,66 @@ class SoberLauncher(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to create profile directory: {e}")
 
+    def system_sober_running(self) -> bool:
+        """
+        Return True if any org.vinegarhq.Sober instance is running on the system,
+        even if it was not launched from this app.
+        """
+        # Try flatpak ps first
+        try:
+            res = subprocess.run(["flatpak", "ps"], capture_output=True, text=True)
+            if res.returncode == 0 and "org.vinegarhq.Sober" in res.stdout:
+                return True
+        except Exception:
+            pass
+
+        # Fallback to pgrep on the command line
+        try:
+            res = subprocess.run(["pgrep", "-af", "flatpak run org.vinegarhq.Sober"], capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                return True
+        except Exception:
+            pass
+
+        # Last resort: grep the process list
+        try:
+            res = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True)
+            if res.returncode == 0 and "org.vinegarhq.Sober" in res.stdout:
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    def _guard_multi_instance(self, requested_count: int = 1):
+        """
+        Guard against launching multiple instances when disabled.
+        requested_count: how many instances the user is attempting to launch.
+        """
+        if not self.allow_multi_instance:
+            if requested_count > 1:
+                QMessageBox.warning(self, "Error", "A Profile is already running, try closing it before opening a new one")
+                return False
+            if self.system_sober_running():
+                QMessageBox.warning(self, "Error", "A Profile is already running, try closing it before opening a new one")
+                return False
+        return True
+
     def launchGame(self):
         if not self.selected_profiles:
             QMessageBox.warning(self, "Error", "No profiles selected.")
             return
 
-        for profile in self.selected_profiles:
+        # When multi-instance is disabled, block multi-selection entirely
+        requested = len(self.selected_profiles) if self.allow_multi_instance else 1
+        if not self._guard_multi_instance(requested_count=requested):
+            return
+
+        targets = self.selected_profiles if self.allow_multi_instance else [self.selected_profiles[0]]
+
+        for profile in targets:
             if profile in self.processes and self.processes[profile].poll() is None:
-                continue  # already running
+                continue  # already running from this launcher
 
             if profile == "Main Profile":
                 proc = subprocess.Popen("flatpak run org.vinegarhq.Sober", shell=True)
@@ -250,6 +310,10 @@ class SoberLauncher(QWidget):
             QMessageBox.warning(self, "Error", "No profiles selected.")
             return
 
+        requested = len(self.selected_profiles) if self.allow_multi_instance else 1
+        if not self._guard_multi_instance(requested_count=requested):
+            return
+
         terminal_command = None
         if shutil.which("konsole"):
             terminal_command = "konsole -e"
@@ -261,7 +325,9 @@ class SoberLauncher(QWidget):
             QMessageBox.critical(self, "Error", "No compatible terminal emulator found.")
             return
 
-        for profile in self.selected_profiles:
+        targets = self.selected_profiles if self.allow_multi_instance else [self.selected_profiles[0]]
+
+        for profile in targets:
             if profile in self.processes and self.processes[profile].poll() is None:
                 continue
 
@@ -280,6 +346,10 @@ class SoberLauncher(QWidget):
             QMessageBox.warning(self, "Error", "No profiles selected.")
             return
 
+        requested = len(self.selected_profiles) if self.allow_multi_instance else 1
+        if not self._guard_multi_instance(requested_count=requested):
+            return
+
         url, ok = QInputDialog.getText(self, "Game Link", "Enter the game link:")
         if ok and url.strip():
             match = re.search(r"games/(\d+)", url.strip())
@@ -290,7 +360,9 @@ class SoberLauncher(QWidget):
             place_id = match.group(1)
             roblox_command = f'roblox://experience?placeId={place_id}'
 
-            for profile in self.selected_profiles:
+            targets = self.selected_profiles if self.allow_multi_instance else [self.selected_profiles[0]]
+
+            for profile in targets:
                 if profile in self.processes and self.processes[profile].poll() is None:
                     continue
 
@@ -328,6 +400,13 @@ class SoberLauncher(QWidget):
         self.updateMissingInstancesLabel(profiles)
 
     def updateMissingInstancesLabel(self, profiles=None):
+        # If multi-instancing disabled, do nothing (UI hidden)
+        if not self.allow_multi_instance:
+            return
+
+        if not hasattr(self, "missingInstancesLabel"):
+            return
+
         running = list(self.processes.keys())
         missing = [p for p in self.launched_profiles if p not in running]
         if missing:
@@ -353,12 +432,16 @@ class SoberLauncher(QWidget):
         default_color = self.palette().color(QPalette.ColorRole.WindowText)
         for i in range(self.profileList.count()):
             item = self.profileList.item(i)
-            if item.text() in missing:
+            if self.allow_multi_instance and item.text() in missing:
                 item.setForeground(QBrush(QColor("#1e3a8a")))  # dark blue
             else:
                 item.setForeground(QBrush(default_color))
 
     def runMissingInstances(self):
+        if not self.allow_multi_instance:
+            QMessageBox.information(self, "Info", "Multi instancing is disabled.")
+            return
+
         running = list(self.processes.keys())
         missing = [p for p in self.launched_profiles if p not in running]
         if not missing:
@@ -414,6 +497,17 @@ class SoberLauncher(QWidget):
         toggle_row.addStretch(1)
         layout.addLayout(toggle_row)
 
+        # Toggle for Multi Instancing (broken)
+        multi_row = QHBoxLayout()
+        multi_label = QLabel("Enable Multi Instancing (broken)")
+        self.multiToggle = QCheckBox()
+        self.multiToggle.setChecked(self.allow_multi_instance)
+        self.multiToggle.stateChanged.connect(self.onMultiToggleChanged)
+        multi_row.addWidget(multi_label)
+        multi_row.addWidget(self.multiToggle)
+        multi_row.addStretch(1)
+        layout.addLayout(multi_row)
+
         update_button = QPushButton("Update")
         update_button.clicked.connect(self.runUpdateScript)
         layout.addWidget(update_button)
@@ -425,6 +519,12 @@ class SoberLauncher(QWidget):
         self.roblox_player_enabled = (state == Qt.CheckState.Checked.value)
         self.saveSettings()
         self.updateRobloxTabVisibility()
+
+    def onMultiToggleChanged(self, state):
+        self.allow_multi_instance = (state == Qt.CheckState.Checked.value)
+        self.saveSettings()
+        # Update UI to reflect mode immediately and restore/hide bottom layout correctly
+        self.applyMultiInstanceUIState()
 
     def updateRobloxTabVisibility(self):
         # Add or remove the Roblox Player tab depending on the toggle
@@ -472,6 +572,10 @@ class SoberLauncher(QWidget):
     # ------------- Lancement via lien pour manquants -------------
 
     def runMissingInstancesWithLink(self):
+        if not self.allow_multi_instance:
+            QMessageBox.information(self, "Info", "Multi instancing is disabled.")
+            return
+
         running = list(self.processes.keys())
         missing = [p for p in self.launched_profiles if p not in running]
         if not missing:
@@ -502,8 +606,12 @@ class SoberLauncher(QWidget):
         self.updateMissingInstancesLabel()
 
     def launchMainProfile(self):
+        # Count any external Sober instances as running
+        if not self._guard_multi_instance(requested_count=1):
+            return
+
         profile = "Main Profile"
-        if profile in self.processes and self.processes[profile].poll() is None:
+        if self.allow_multi_instance and profile in self.processes and self.processes[profile].poll() is None:
             QMessageBox.information(self, "Info", "Main Profile is already running.")
             return
         proc = subprocess.Popen("flatpak run org.vinegarhq.Sober", shell=True)
@@ -664,6 +772,51 @@ class SoberLauncher(QWidget):
         for name, parameter in self.privateServers:
             self.addPrivateServerButtonWidget(name, parameter)
 
+    # ------------- Profile context menu -> Desktop entry -------------
+
+    def showProfileContextMenu(self, pos):
+        item = self.profileList.itemAt(pos)
+        if not item:
+            return
+        profile = item.text()
+        menu = QMenu()
+        add_action = menu.addAction("Add to desktop entry")
+        action = menu.exec(self.profileList.mapToGlobal(pos))
+        if action == add_action:
+            self.createDesktopEntry(profile)
+
+    def createDesktopEntry(self, profile):
+        # Resolve desktop directory; fallback to home if Desktop doesn't exist
+        home = os.path.expanduser("~")
+        desktop_dir = os.path.join(home, "Desktop")
+        target_dir = desktop_dir if os.path.isdir(desktop_dir) else home
+        os.makedirs(target_dir, exist_ok=True)
+
+        filename = os.path.join(target_dir, f"{profile}.desktop")
+
+        if profile == "Main Profile":
+            exec_cmd = "flatpak run org.vinegarhq.Sober"
+        else:
+            profile_path = os.path.join(self.base_dir, profile)
+            exec_cmd = f'env HOME="{profile_path}" flatpak run org.vinegarhq.Sober'
+
+        icon_path = os.path.abspath("SoberLauncher.svg")
+
+        content = f"""[Desktop Entry]
+Type=Application
+Name={profile}
+Exec={exec_cmd}
+Icon={icon_path}
+Terminal=false
+"""
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.chmod(filename, 0o755)
+            QMessageBox.information(self, "Desktop Entry", f"Created {filename}")
+        except Exception as e:
+            QMessageBox.critical(self, "Desktop Entry", f"Failed to create {filename}:\n{e}")
+
     # ------------- UI -------------
 
     def initUI(self):
@@ -675,7 +828,7 @@ class SoberLauncher(QWidget):
 
         # ----- Onglet Instances -----
         instances_tab = QWidget()
-        instances_layout = QVBoxLayout(instances_tab)
+        self.instances_layout = QVBoxLayout(instances_tab)
 
         main_layout = QHBoxLayout()
         left_layout = QVBoxLayout()
@@ -695,7 +848,8 @@ class SoberLauncher(QWidget):
         self.createProfileButton.clicked.connect(self.createProfile)
         top_bar.addWidget(self.createProfileButton)
 
-        self.exitAllButton = QPushButton("Exit All Sessions")
+        # Exit button label depends on multi-instance
+        self.exitAllButton = QPushButton("Exit Current Session" if not self.allow_multi_instance else "Exit All Sessions")
         self.exitAllButton.clicked.connect(self.exitAllSessions)
         top_bar.addWidget(self.exitAllButton)
 
@@ -712,6 +866,10 @@ class SoberLauncher(QWidget):
         self.profileList = QListWidget()
         self.profileList.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.profileList.itemSelectionChanged.connect(self.updateSelectedProfiles)
+        # Add context menu for desktop entry
+        self.profileList.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.profileList.customContextMenuRequested.connect(self.showProfileContextMenu)
+
         left_layout.addWidget(self.profileList)
 
         right_layout = QVBoxLayout()
@@ -748,25 +906,33 @@ class SoberLauncher(QWidget):
         main_layout.addLayout(left_layout)
         main_layout.addWidget(right_panel_widget)
 
-        bottom_layout = QHBoxLayout()
+        # Bottom layout (missing instances bar)
+        self.bottom_layout = QHBoxLayout()
         self.missingInstancesLabel = QLabel("Instances not running: None")
         self.missingInstancesLabel.setWordWrap(True)
         self.missingInstancesLabel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        bottom_layout.addWidget(self.missingInstancesLabel)
+        self.bottom_layout.addWidget(self.missingInstancesLabel)
 
         self.runMissingButton = QPushButton("Run Missing Instances")
         self.runMissingButton.clicked.connect(self.runMissingInstances)
-        bottom_layout.addWidget(self.runMissingButton)
+        self.bottom_layout.addWidget(self.runMissingButton)
 
         self.runMissingWithLinkButton = QPushButton()
         self.runMissingWithLinkButton.setIcon(QIcon.fromTheme("internet-web-browser"))
         self.runMissingWithLinkButton.setToolTip("Run Missing Instances with Game Link")
         self.runMissingWithLinkButton.clicked.connect(self.runMissingInstancesWithLink)
-        bottom_layout.addWidget(self.runMissingWithLinkButton)
+        self.bottom_layout.addWidget(self.runMissingWithLinkButton)
 
-        instances_layout.addLayout(main_layout)
-        instances_layout.addLayout(bottom_layout)
-        instances_tab.setLayout(instances_layout)
+        # Add main and bottom sections
+        self.instances_layout.addLayout(main_layout)
+        # Add bottom layout only when multi-instance is enabled
+        if self.allow_multi_instance:
+            self.instances_layout.addLayout(self.bottom_layout)
+            self.bottom_layout_added = True
+        else:
+            self.bottom_layout_added = False
+
+        instances_tab.setLayout(self.instances_layout)
 
         # ----- Roblox Player tab (created once; visibility controlled by toggle) -----
         self.roblox_tab = QWidget()
@@ -841,6 +1007,46 @@ class SoberLauncher(QWidget):
 
         # Apply startup window mode (maximize/fullscreen depending on environment)
         self.applyWindowStartupMode()
+
+        # Ensure the UI reflects current multi-instance setting
+        QTimer.singleShot(0, self.applyMultiInstanceUIState)
+
+    def applyMultiInstanceUIState(self):
+        # Update exit button label
+        if hasattr(self, "exitAllButton"):
+            self.exitAllButton.setText("Exit All Sessions" if self.allow_multi_instance else "Exit Current Session")
+
+        # Add/remove bottom layout from instances_layout so it truly appears/disappears
+        if self.allow_multi_instance and not self.bottom_layout_added:
+            self.instances_layout.addLayout(self.bottom_layout)
+            self.bottom_layout_added = True
+        elif not self.allow_multi_instance and self.bottom_layout_added:
+            # Remove bottom layout by hiding its widgets and detaching it
+            for i in range(self.bottom_layout.count()):
+                item = self.bottom_layout.itemAt(i)
+                w = item.widget()
+                if w:
+                    w.hide()
+            # Note: Qt doesn't provide removeLayout directly; using setParent(None) to detach
+            container = QWidget()
+            temp_layout = QVBoxLayout(container)
+            temp_layout.addLayout(self.bottom_layout)
+            container.setParent(None)
+            self.bottom_layout_added = False
+
+        # Update missing label immediately if enabled; clear highlighting if disabled
+        if self.allow_multi_instance:
+            self.updateMissingInstancesLabel()
+            # Ensure widgets visible
+            for i in range(self.bottom_layout.count()):
+                item = self.bottom_layout.itemAt(i)
+                w = item.widget()
+                if w:
+                    w.show()
+        else:
+            self.colorizeMissingProfiles(missing=[])
+            if hasattr(self, "missingInstancesLabel"):
+                self.missingInstancesLabel.setText("Launched instances not running: None")
 
     # ------------- Startup window mode -------------
 
