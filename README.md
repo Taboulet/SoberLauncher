@@ -1,3 +1,6 @@
+# Note
+This is a vibecoded mess and i'm too lazy to fix it, sorry 
+
 # SoberLauncher
 An easy launcher to control all your Sober Instances
 
